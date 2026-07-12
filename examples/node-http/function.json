@@ -1,0 +1,24 @@
+{
+  "image": "harbor.woostack.dev/functions/hello:202607120001",
+  "description": "Minimal Node.js HTTP function",
+  "visibility": "cluster-local",
+  "env": {
+    "LOG_LEVEL": "info"
+  },
+  "resources": {
+    "requests": {
+      "cpu": "25m",
+      "memory": "32Mi"
+    },
+    "limits": {
+      "cpu": "250m",
+      "memory": "128Mi"
+    }
+  },
+  "scaling": {
+    "minScale": 0,
+    "maxScale": 5,
+    "targetConcurrency": 10
+  },
+  "timeoutSeconds": 30
+}
