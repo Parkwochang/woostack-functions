@@ -1,0 +1,276 @@
+openapi: 3.1.0
+info:
+  title: Woostack Functions API
+  version: 0.0.1
+  description: Kubernetes-native function control plane MVP
+servers:
+  - url: http://localhost:3000
+paths:
+  /:
+    get:
+      summary: Get platform metadata
+      responses:
+        '200':
+          description: Platform metadata
+          content:
+            application/json:
+              schema:
+                type: object
+  /healthz:
+    get:
+      summary: Check API process health
+      responses:
+        '200':
+          description: Process is healthy
+  /readyz:
+    get:
+      summary: Check Kubernetes and Knative Serving readiness
+      responses:
+        '200':
+          description: Knative Serving API is reachable
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/functions:
+    get:
+      summary: List functions managed by this control plane
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Function list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: '#/components/schemas/FunctionView'
+        '502':
+          $ref: '#/components/responses/Error'
+        '503':
+          $ref: '#/components/responses/Error'
+  /v1/functions/{name}:
+    parameters:
+      - $ref: '#/components/parameters/FunctionName'
+    get:
+      summary: Get function deployment state
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Function state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FunctionView'
+        '404':
+          $ref: '#/components/responses/Error'
+    put:
+      summary: Create or update a function
+      description: Applies a Knative Service using Kubernetes server-side apply.
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FunctionSpec'
+      responses:
+        '200':
+          description: Applied Knative Service state
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/FunctionView'
+        '400':
+          $ref: '#/components/responses/Error'
+        '403':
+          $ref: '#/components/responses/Error'
+        '409':
+          $ref: '#/components/responses/Error'
+    delete:
+      summary: Delete a function
+      security:
+        - bearerAuth: []
+      responses:
+        '200':
+          description: Idempotent delete result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [name, deleted]
+                properties:
+                  name:
+                    type: string
+                  deleted:
+                    const: true
+  /v1/functions/{name}/render:
+    parameters:
+      - $ref: '#/components/parameters/FunctionName'
+    post:
+      summary: Render a Knative Service without applying it
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/FunctionSpec'
+      responses:
+        '201':
+          description: Rendered serving.knative.dev/v1 Service
+          content:
+            application/json:
+              schema:
+                type: object
+        '400':
+          $ref: '#/components/responses/Error'
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  parameters:
+    FunctionName:
+      name: name
+      in: path
+      required: true
+      description: Lowercase Kubernetes DNS label
+      schema:
+        type: string
+        maxLength: 63
+        pattern: '^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$'
+  responses:
+    Error:
+      description: Error response
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/Error'
+  schemas:
+    FunctionSpec:
+      type: object
+      additionalProperties: false
+      required: [image]
+      properties:
+        image:
+          type: string
+          description: Immutable OCI image tag or sha256 digest; latest is rejected.
+          examples:
+            - harbor.woostack.dev/functions/hello:202607120001
+        description:
+          type: string
+          maxLength: 200
+        port:
+          type: integer
+          minimum: 1
+          maximum: 65535
+          default: 8080
+        timeoutSeconds:
+          type: integer
+          minimum: 1
+          maximum: 600
+          default: 30
+        visibility:
+          type: string
+          enum: [cluster-local, external]
+          default: cluster-local
+        env:
+          type: object
+          additionalProperties:
+            type: string
+          maxProperties: 64
+        configMapRefs:
+          type: array
+          maxItems: 16
+          items:
+            type: string
+        secretRefs:
+          type: array
+          maxItems: 1
+          description: The only allowed name is <function-name>-secrets.
+          items:
+            type: string
+        resources:
+          $ref: '#/components/schemas/Resources'
+        scaling:
+          $ref: '#/components/schemas/Scaling'
+    Resources:
+      type: object
+      additionalProperties: false
+      properties:
+        requests:
+          $ref: '#/components/schemas/ResourcePair'
+        limits:
+          $ref: '#/components/schemas/ResourcePair'
+    ResourcePair:
+      type: object
+      additionalProperties: false
+      properties:
+        cpu:
+          type: string
+          examples: [25m]
+        memory:
+          type: string
+          examples: [32Mi]
+    Scaling:
+      type: object
+      additionalProperties: false
+      properties:
+        minScale:
+          type: integer
+          minimum: 0
+          maximum: 10
+          default: 0
+        maxScale:
+          type: integer
+          minimum: 1
+          maximum: 20
+          default: 10
+        targetConcurrency:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 10
+    FunctionView:
+      type: object
+      required: [name, namespace, image, state]
+      properties:
+        name:
+          type: string
+        namespace:
+          type: string
+        image:
+          type: string
+        generation:
+          type: integer
+        createdAt:
+          type: string
+          format: date-time
+        state:
+          type: string
+          enum: [deploying, ready, failed, unknown]
+        url:
+          type: string
+          format: uri
+        revision:
+          type: string
+        reason:
+          type: string
+        message:
+          type: string
+    Error:
+      type: object
+      properties:
+        statusCode:
+          type: integer
+        message:
+          oneOf:
+            - type: string
+            - type: array
+              items:
+                type: string
+        error:
+          type: string
