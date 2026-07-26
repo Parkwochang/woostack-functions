@@ -1,5 +1,37 @@
-import { BadRequestException } from '@nestjs/common';
-import { FunctionSpec, FunctionVisibility } from './function.types';
+import { FunctionValidationError } from './function.errors';
+import { FunctionName } from './function-name';
+
+export type FunctionVisibility = 'cluster-local' | 'external';
+
+export interface FunctionResources {
+  requests: {
+    cpu: string;
+    memory: string;
+  };
+  limits: {
+    cpu: string;
+    memory: string;
+  };
+}
+
+export interface FunctionScaling {
+  minScale: number;
+  maxScale: number;
+  targetConcurrency: number;
+}
+
+export interface FunctionDefinitionProps {
+  image: string;
+  description?: string;
+  port: number;
+  timeoutSeconds: number;
+  visibility: FunctionVisibility;
+  env: Record<string, string>;
+  configMapRefs: string[];
+  secretRefs: string[];
+  resources: FunctionResources;
+  scaling: FunctionScaling;
+}
 
 const DNS_LABEL = /^[a-z0-9](?:[-a-z0-9]*[a-z0-9])?$/;
 const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/;
@@ -26,7 +58,7 @@ const ALLOWED_FIELDS = new Set([
   'scaling',
 ]);
 
-const defaults: Omit<FunctionSpec, 'image' | 'description'> = {
+const defaults: Omit<FunctionDefinitionProps, 'image' | 'description'> = {
   port: 8080,
   timeoutSeconds: 30,
   visibility: 'cluster-local',
@@ -44,15 +76,32 @@ const defaults: Omit<FunctionSpec, 'image' | 'description'> = {
   },
 };
 
-export function assertFunctionName(name: string): void {
-  if (name.length < 1 || name.length > 63 || !DNS_LABEL.test(name)) {
-    invalid(
-      'name must be a lowercase Kubernetes DNS label with at most 63 characters',
-    );
+export class FunctionDefinition {
+  private constructor(private readonly props: FunctionDefinitionProps) {}
+
+  static fromUnknown(value: unknown): FunctionDefinition {
+    return new FunctionDefinition(parseDefinition(value));
+  }
+
+  assertSecretOwnership(name: FunctionName): void {
+    if (this.props.secretRefs.length > 1) {
+      invalid('MVP functions can reference at most one Secret');
+    }
+
+    const expectedName = `${name.value}-secrets`;
+    for (const secretName of this.props.secretRefs) {
+      if (secretName !== expectedName) {
+        invalid(`secretRefs entry ${secretName} must be named ${expectedName}`);
+      }
+    }
+  }
+
+  toPrimitives(): FunctionDefinitionProps {
+    return structuredClone(this.props);
   }
 }
 
-export function parseFunctionSpec(value: unknown): FunctionSpec {
+function parseDefinition(value: unknown): FunctionDefinitionProps {
   const input = object(value, 'body');
 
   for (const field of Object.keys(input)) {
@@ -95,22 +144,6 @@ export function parseFunctionSpec(value: unknown): FunctionSpec {
     resources,
     scaling,
   };
-}
-
-export function assertFunctionSecretRefs(
-  name: string,
-  spec: FunctionSpec,
-): void {
-  if (spec.secretRefs.length > 1) {
-    invalid('MVP functions can reference at most one Secret');
-  }
-
-  const expectedName = `${name}-secrets`;
-  for (const secretName of spec.secretRefs) {
-    if (secretName !== expectedName) {
-      invalid(`secretRefs entry ${secretName} must be named ${expectedName}`);
-    }
-  }
 }
 
 function parseVisibility(value: unknown): FunctionVisibility {
@@ -167,7 +200,7 @@ function parseResourceNames(value: unknown, field: string): string[] {
   });
 }
 
-function parseResources(value: unknown): FunctionSpec['resources'] {
+function parseResources(value: unknown): FunctionResources {
   if (value === undefined) {
     return structuredClone(defaults.resources);
   }
@@ -226,7 +259,7 @@ function nestedQuantities(
   return { cpu, memory };
 }
 
-function parseScaling(value: unknown): FunctionSpec['scaling'] {
+function parseScaling(value: unknown): FunctionScaling {
   if (value === undefined) {
     return { ...defaults.scaling };
   }
@@ -342,5 +375,5 @@ function optionalInteger(
 }
 
 function invalid(message: string): never {
-  throw new BadRequestException(message);
+  throw new FunctionValidationError(message);
 }

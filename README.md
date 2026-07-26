@@ -29,14 +29,53 @@ flowchart LR
 - Kourier: Knative 내부 요청 라우팅. 기존 ingress-nginx는 외부 진입점으로 유지
 - Harbor: 함수와 control plane의 OCI 이미지 저장
 - Vault + External Secrets: 함수가 참조할 Kubernetes Secret 생성
-- Prometheus: 플랫폼과 함수 메트릭 수집. 애플리케이션 메트릭 연동은 다음 단계
+- Prometheus: `/metrics`에서 control plane 기본 메트릭 수집. 함수 메트릭 연동은 다음 단계
 
 더 자세한 선택 근거와 단계별 범위는 [docs/architecture.md](docs/architecture.md), API 계약은 [docs/openapi.yaml](docs/openapi.yaml), 함수 런타임 규칙은 [docs/runtime-contract.md](docs/runtime-contract.md)를 참고하세요.
+
+### 백엔드 DDD 구조
+
+현재는 하나의 배포 단위를 유지하는 모듈러 모놀리스입니다. 함수 관리 도메인이 NestJS나 Kubernetes 구현에 직접 의존하지 않도록 경계를 나눴습니다.
+
+```text
+src/
+├── modules/
+│   ├── auth/
+│   │   └── presentation/http/       # 관리 API 인증 Guard
+│   └── functions/
+│       ├── domain/                  # 함수 정의, 이름, 오류, Runtime port
+│       ├── application/             # 함수 CRUD 유스케이스 조정
+│       ├── infrastructure/
+│       │   ├── kubernetes/          # 공식 Kubernetes client-node 어댑터
+│       │   └── knative/             # Knative Service 구현과 매니페스트
+│       └── presentation/http/       # Controller와 HTTP 예외 매핑
+└── shared/
+    ├── config/                      # 환경 변수 스키마와 타입
+    └── observability/               # Prometheus 메트릭
+```
+
+의존 방향은 `presentation → application → domain`이며, `infrastructure`가 domain의 `FunctionRuntimePort`를 구현합니다. 이후 Knative 대신 다른 런타임을 시험하더라도 application과 HTTP API를 유지하고 어댑터를 교체할 수 있습니다.
+
+### 추가한 주요 라이브러리
+
+| 라이브러리 | 역할 |
+|---|---|
+| `@kubernetes/client-node` | 토큰, CA, kubeconfig, Kubernetes Custom Resource 요청 처리 |
+| `@nestjs/config` + `zod` | 환경 변수 로딩, 시작 시 검증, 타입 안전한 설정 조회 |
+| `@nestjs/swagger` + `swagger-ui-express` | 개발 환경의 `/docs` API 문서 |
+| `@nestjs/throttler` | 함수 관리 API 요청 제한 |
+| `helmet` | 기본 HTTP 보안 헤더 |
+| `nestjs-pino` + `pino` | 구조화 로그와 인증 헤더 마스킹 |
+| `prom-client` | `/metrics` Prometheus 메트릭 |
+
+`@kubernetes/client-node`는 현재 CommonJS Nest 빌드와 호환되는 `0.22.3`으로 고정했습니다. 최신 1.x를 사용하려면 프로젝트 전체를 ESM으로 전환하는 작업을 함께 해야 합니다.
 
 ## 현재 구현 범위
 
 - `GET /healthz`: API 프로세스 상태
 - `GET /readyz`: Kubernetes의 Knative Serving API 접근 확인
+- `GET /metrics`: Prometheus 형식의 control plane 메트릭
+- `GET /docs`: Swagger UI. 기본적으로 non-production에서만 활성화
 - `GET /v1/functions`: 이 control plane이 관리하는 함수 목록
 - `GET /v1/functions/:name`: 함수 상태와 최신 Ready Revision 조회
 - `PUT /v1/functions/:name`: Knative Service server-side apply
@@ -125,23 +164,26 @@ kubectl kustomize deploy/base
 | 환경 변수 | 기본값 | 설명 |
 |---|---:|---|
 | `PORT` | `3000` | control plane HTTP 포트 |
+| `LOG_LEVEL` | `info` | Pino 로그 레벨 |
+| `API_DOCS_ENABLED` | non-production에서 `true` | Swagger UI 활성화 여부 |
 | `FUNCTION_NAMESPACE` | `functions` | 함수 Knative Service namespace |
 | `FUNCTION_SERVICE_ACCOUNT` | `function-runtime` | 함수 Pod ServiceAccount |
 | `FUNCTION_API_TOKEN` | 없음 | 관리 API Bearer token; 없으면 관리 API 차단 |
 | `FUNCTION_ALLOW_INSECURE_LOCAL` | `false` | 비-production에서만 token 검사를 끄는 명시적 escape hatch |
-| `KUBERNETES_API_URL` | in-cluster API | 로컬 프록시 등 Kubernetes API 주소 |
-| `KUBERNETES_TOKEN` | mounted token | API 인증 토큰 |
+| `KUBERNETES_API_URL` | 자동 감지 | 로컬 프록시 등 명시적 Kubernetes API 주소 |
+| `KUBERNETES_TOKEN` | 없음 | 명시적 API 인증 토큰 |
+| `KUBERNETES_TOKEN_FILE` | ServiceAccount token 경로 | 파일 기반 API 인증 토큰 |
 | `KUBERNETES_CA_FILE` | mounted `ca.crt` | API 서버 CA 파일 |
-| `KUBERNETES_API_TIMEOUT_MS` | `5000` | API 요청 timeout |
-| `KUBERNETES_MAX_RESPONSE_BYTES` | `5242880` | API 응답 버퍼 상한 |
 | `KUBERNETES_SKIP_TLS_VERIFY` | `false` | 로컬 진단 외에는 사용 금지 |
+| `MANAGEMENT_THROTTLE_TTL_MS` | `60000` | 관리 API rate limit 구간 |
+| `MANAGEMENT_THROTTLE_LIMIT` | `120` | 구간당 관리 API 요청 수 |
 
 ## 검증
 
 ```bash
 pnpm build
-pnpm test -- --runInBand
-pnpm test:e2e -- --runInBand
+pnpm test --runInBand --watchman=false
+pnpm test:e2e --runInBand --watchman=false
 pnpm exec eslint "{src,test}/**/*.ts"
 kubectl kustomize deploy/base
 ```
