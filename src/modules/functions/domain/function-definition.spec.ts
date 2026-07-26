@@ -1,13 +1,11 @@
-import { BadRequestException } from '@nestjs/common';
-import {
-  assertFunctionSecretRefs,
-  parseFunctionSpec,
-} from './function-spec.parser';
+import { FunctionDefinition } from './function-definition';
+import { FunctionValidationError } from './function.errors';
+import { FunctionName } from './function-name';
 
-describe('parseFunctionSpec', () => {
+describe('FunctionDefinition', () => {
   it('applies safe MVP defaults', () => {
     expect(
-      parseFunctionSpec({
+      parse({
         image: 'harbor.woostack.dev/functions/hello:202607120001',
       }),
     ).toEqual({
@@ -32,15 +30,15 @@ describe('parseFunctionSpec', () => {
 
   it('rejects mutable latest images', () => {
     expect(() =>
-      parseFunctionSpec({
+      parse({
         image: 'harbor.woostack.dev/functions/hello:latest',
       }),
-    ).toThrow(BadRequestException);
+    ).toThrow(FunctionValidationError);
   });
 
   it('rejects invalid scale bounds', () => {
     expect(() =>
-      parseFunctionSpec({
+      parse({
         image: 'harbor.woostack.dev/functions/hello:1',
         scaling: { minScale: 2, maxScale: 1 },
       }),
@@ -51,7 +49,7 @@ describe('parseFunctionSpec', () => {
 
   it('rejects reserved runtime environment variables', () => {
     expect(() =>
-      parseFunctionSpec({
+      parse({
         image: 'harbor.woostack.dev/functions/hello:1',
         env: { PORT: '3000' },
       }),
@@ -60,7 +58,7 @@ describe('parseFunctionSpec', () => {
 
   it('rejects Knative runtime environment variables', () => {
     expect(() =>
-      parseFunctionSpec({
+      parse({
         image: 'harbor.woostack.dev/functions/hello:1',
         env: { K_REVISION: 'forged' },
       }),
@@ -69,24 +67,24 @@ describe('parseFunctionSpec', () => {
 
   it('rejects malformed OCI image references', () => {
     expect(() =>
-      parseFunctionSpec({ image: 'https://registry.example.com/image:1' }),
+      parse({ image: 'https://registry.example.com/image:1' }),
     ).toThrow('image must be a valid lowercase OCI repository');
   });
 
   it('restricts secrets to the function name prefix', () => {
-    const spec = parseFunctionSpec({
+    const definition = FunctionDefinition.fromUnknown({
       image: 'harbor.woostack.dev/functions/hello:1',
       secretRefs: ['other-function-secret'],
     });
 
-    expect(() => assertFunctionSecretRefs('hello', spec)).toThrow(
-      'must be named hello-secrets',
-    );
+    expect(() =>
+      definition.assertSecretOwnership(FunctionName.create('hello')),
+    ).toThrow('must be named hello-secrets');
   });
 
   it('rejects resource requests above their limits', () => {
     expect(() =>
-      parseFunctionSpec({
+      parse({
         image: 'harbor.woostack.dev/functions/hello:1',
         resources: {
           requests: { memory: '256Mi' },
@@ -98,3 +96,7 @@ describe('parseFunctionSpec', () => {
     );
   });
 });
+
+function parse(value: unknown) {
+  return FunctionDefinition.fromUnknown(value).toPrimitives();
+}

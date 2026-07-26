@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
-import { FunctionsService } from './functions/functions.service';
+import { FunctionsApplicationService } from './modules/functions/application/functions.application-service';
 
 describe('AppController', () => {
   let appController: AppController;
@@ -14,7 +14,10 @@ describe('AppController', () => {
       controllers: [AppController],
       providers: [
         AppService,
-        { provide: FunctionsService, useValue: functionsService },
+        {
+          provide: FunctionsApplicationService,
+          useValue: functionsService,
+        },
       ],
     }).compile();
 

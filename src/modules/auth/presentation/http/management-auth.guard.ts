@@ -5,7 +5,9 @@ import {
   ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { timingSafeEqual } from 'node:crypto';
+import { Environment } from '../../../../shared/config/environment';
 
 interface RequestWithHeaders {
   headers: {
@@ -15,14 +17,18 @@ interface RequestWithHeaders {
 
 @Injectable()
 export class ManagementAuthGuard implements CanActivate {
+  constructor(private readonly config: ConfigService<Environment, true>) {}
+
   canActivate(context: ExecutionContext): boolean {
-    const expected = process.env.FUNCTION_API_TOKEN;
+    const expected = this.config.get('FUNCTION_API_TOKEN', { infer: true });
+    const nodeEnvironment = this.config.get('NODE_ENV', { infer: true });
+    const allowInsecureLocal = this.config.get(
+      'FUNCTION_ALLOW_INSECURE_LOCAL',
+      { infer: true },
+    );
 
     if (expected === undefined || expected.length === 0) {
-      if (
-        process.env.NODE_ENV !== 'production' &&
-        process.env.FUNCTION_ALLOW_INSECURE_LOCAL === 'true'
-      ) {
+      if (nodeEnvironment !== 'production' && allowInsecureLocal) {
         return true;
       }
 

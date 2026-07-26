@@ -1,4 +1,6 @@
-import { FunctionSpec } from './function.types';
+import { FunctionDefinition } from '../../domain/function-definition';
+import { FunctionName } from '../../domain/function-name';
+import { KubernetesObjectResource } from '../kubernetes/kubernetes-object.client';
 
 export const MANAGED_BY_LABEL = 'app.kubernetes.io/managed-by';
 export const MANAGED_BY_VALUE = 'woostack-functions';
@@ -9,7 +11,12 @@ export class KnativeManifestFactory {
     private readonly serviceAccountName: string,
   ) {}
 
-  build(name: string, spec: FunctionSpec) {
+  build(
+    functionName: FunctionName,
+    definition: FunctionDefinition,
+  ): KubernetesObjectResource {
+    const name = functionName.value;
+    const spec = definition.toPrimitives();
     const labels: Record<string, string> = {
       'app.kubernetes.io/name': name,
       [MANAGED_BY_LABEL]: MANAGED_BY_VALUE,
