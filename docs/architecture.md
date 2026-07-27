@@ -87,6 +87,19 @@ sequenceDiagram
     F-->>C: HTTP response
 ```
 
+### 상태 이벤트
+
+```mermaid
+flowchart LR
+    K["Kubernetes Watch"] --> R["RxJS reconnect / filter"]
+    R --> E["FunctionEventPublisher"]
+    A["CRUD 성공 결과"] --> E
+    E --> L["구조화 로그"]
+    E --> M["Prometheus event counter"]
+```
+
+CRUD와 Knative 상태 변경은 `FunctionEventPublisher` 경계를 통해 프로세스 내부 EventEmitter로 발행합니다. 이 이벤트는 관측과 알림을 위한 best-effort 신호이며 CRUD 성공의 일부가 아닙니다. 다중 replica에서 replay나 재시도가 필요한 외부 이벤트 실행은 Redis Pub/Sub 대신 Redis Streams consumer group을 중심에 두고, 지연 재시도만 Sorted Set으로 분리합니다.
+
 ## 5. API와 desired state
 
 초기에는 Kubernetes의 Knative Service가 desired state이자 상태 저장소입니다. PostgreSQL을 먼저 추가하지 않는 이유는 함수 명세, generation, condition, Revision 상태가 이미 Kubernetes API에 있기 때문입니다.
@@ -151,7 +164,7 @@ namespace quota는 클러스터 보호용 상한이지 함수의 `maxScale` 보�
 
 ## 8. 관측성과 운영
 
-초기 공통 label은 함수 이름과 관리 주체를 포함합니다. 다음 단계에서 추가할 항목은 다음과 같습니다.
+초기 공통 label은 함수 이름과 관리 주체를 포함하며, control plane은 `woostack_functions_events_total`에서 lifecycle 이벤트 수를 기록합니다. 다음 단계에서 추가할 항목은 다음과 같습니다.
 
 - control plane: request count/latency/error, Kubernetes reconcile error
 - 함수: invocation count/latency/status, cold start, concurrency
