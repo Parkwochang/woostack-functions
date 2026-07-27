@@ -31,7 +31,7 @@ interface KnativeCondition {
   message?: string;
 }
 
-interface KnativeServiceResource extends KubernetesObjectResource {
+export interface KnativeServiceResource extends KubernetesObjectResource {
   metadata: KubernetesObjectResource['metadata'] & {
     name?: string;
     namespace?: string;
@@ -86,14 +86,14 @@ export class KnativeRuntimeAdapter implements FunctionRuntimePort {
     );
 
     return (response.items ?? []).map((item) =>
-      mapService(item as KnativeServiceResource),
+      mapKnativeService(item as KnativeServiceResource),
     );
   }
 
   async get(name: FunctionName): Promise<FunctionView> {
     const response = await this.read(name);
     assertManaged(name, response);
-    return mapService(response);
+    return mapKnativeService(response);
   }
 
   async apply(
@@ -108,32 +108,33 @@ export class KnativeRuntimeAdapter implements FunctionRuntimePort {
       );
       assertManaged(name, existing);
       const response = await this.client.apply(manifest, MANAGED_BY_VALUE);
-      return mapService(response);
+      return mapKnativeService(response);
     } catch (error) {
       if (error instanceof KubernetesClientError && error.statusCode === 404) {
         const response = await this.execute(() =>
           this.client.create(manifest, MANAGED_BY_VALUE),
         );
-        return mapService(response);
+        return mapKnativeService(response);
       }
       throw normalizeRuntimeError(error);
     }
   }
 
-  async delete(name: FunctionName): Promise<void> {
+  async delete(name: FunctionName): Promise<FunctionView | undefined> {
     try {
       const existing = await this.client.read(
         resourceHeader(name, this.namespace),
       );
       assertManaged(name, existing);
       await this.client.delete(resourceHeader(name, this.namespace));
+      return mapKnativeService(existing);
     } catch (error) {
       if (
         error instanceof KubernetesClientError &&
         error.statusCode === 404 &&
         isNamedResourceNotFound(error.response, name.value)
       ) {
-        return;
+        return undefined;
       }
       throw normalizeRuntimeError(error);
     }
@@ -173,12 +174,15 @@ function resourceHeader(
   };
 }
 
-function mapService(resource: KnativeServiceResource): FunctionView {
-  const ready = resource.status?.conditions?.find(
+export function mapKnativeService(
+  resource: KubernetesObjectResource,
+): FunctionView {
+  const service = resource as KnativeServiceResource;
+  const ready = service.status?.conditions?.find(
     (condition) => condition.type === 'Ready',
   );
-  const generation = resource.metadata.generation;
-  const observedGeneration = resource.status?.observedGeneration;
+  const generation = service.metadata.generation;
+  const observedGeneration = service.status?.observedGeneration;
   const isStale =
     generation !== undefined &&
     observedGeneration !== undefined &&
@@ -186,18 +190,18 @@ function mapService(resource: KnativeServiceResource): FunctionView {
   const state = mapState(ready, isStale);
 
   return {
-    name: resource.metadata.name ?? 'unknown',
-    namespace: resource.metadata.namespace ?? 'unknown',
-    image: resource.spec?.template?.spec?.containers?.[0]?.image ?? 'unknown',
+    name: service.metadata.name ?? 'unknown',
+    namespace: service.metadata.namespace ?? 'unknown',
+    image: service.spec?.template?.spec?.containers?.[0]?.image ?? 'unknown',
     state,
     ...(generation === undefined ? {} : { generation }),
-    ...(resource.metadata.creationTimestamp === undefined
+    ...(service.metadata.creationTimestamp === undefined
       ? {}
-      : { createdAt: resource.metadata.creationTimestamp }),
-    ...(resource.status?.url === undefined ? {} : { url: resource.status.url }),
-    ...(isStale || resource.status?.latestReadyRevisionName === undefined
+      : { createdAt: service.metadata.creationTimestamp }),
+    ...(service.status?.url === undefined ? {} : { url: service.status.url }),
+    ...(isStale || service.status?.latestReadyRevisionName === undefined
       ? {}
-      : { revision: resource.status.latestReadyRevisionName }),
+      : { revision: service.status.latestReadyRevisionName }),
     ...(ready?.reason === undefined ? {} : { reason: ready.reason }),
     ...(ready?.message === undefined ? {} : { message: ready.message }),
   };

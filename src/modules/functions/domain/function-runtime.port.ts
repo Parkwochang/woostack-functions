@@ -24,7 +24,7 @@ export interface FunctionRuntimePort {
     name: FunctionName,
     definition: FunctionDefinition,
   ): Promise<FunctionView>;
-  delete(name: FunctionName): Promise<void>;
+  delete(name: FunctionName): Promise<FunctionView | undefined>;
   render(name: FunctionName, definition: FunctionDefinition): unknown;
 }
 

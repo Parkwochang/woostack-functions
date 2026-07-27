@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { APP_FILTER } from '@nestjs/core';
+import { EventEmitterModule } from '@nestjs/event-emitter';
 import { ThrottlerModule } from '@nestjs/throttler';
 import { LoggerModule } from 'nestjs-pino';
 import { AppController } from './app.controller';
@@ -17,27 +18,46 @@ import { ObservabilityModule } from './shared/observability/observability.module
       cache: true,
       validate: validateEnvironment,
     }),
+    EventEmitterModule.forRoot({
+      wildcard: true,
+      delimiter: '.',
+    }),
     LoggerModule.forRootAsync({
       inject: [ConfigService],
-      useFactory: (config: ConfigService<Environment, true>) => ({
-        pinoHttp: {
-          level: config.get('LOG_LEVEL', { infer: true }),
-          redact: {
-            paths: [
-              'req.headers.authorization',
-              'req.headers.cookie',
-              'res.headers.set-cookie',
-            ],
-            censor: '[Redacted]',
+      useFactory: (config: ConfigService<Environment, true>) => {
+        const isDevelopment =
+          config.get('NODE_ENV', { infer: true }) === 'development';
+
+        return {
+          pinoHttp: {
+            level: config.get('LOG_LEVEL', { infer: true }),
+            transport: isDevelopment
+              ? {
+                  target: require.resolve('pino-pretty'),
+                  options: {
+                    colorize: true,
+                    translateTime: 'SYS:standard',
+                    ignore: 'pid,hostname',
+                  },
+                }
+              : undefined,
+            redact: {
+              paths: [
+                'req.headers.authorization',
+                'req.headers.cookie',
+                'res.headers.set-cookie',
+              ],
+              censor: '[Redacted]',
+            },
+            autoLogging: {
+              ignore: (request) =>
+                request.url === '/healthz' ||
+                request.url === '/readyz' ||
+                request.url === '/metrics',
+            },
           },
-          autoLogging: {
-            ignore: (request) =>
-              request.url === '/healthz' ||
-              request.url === '/readyz' ||
-              request.url === '/metrics',
-          },
-        },
-      }),
+        };
+      },
     }),
     ThrottlerModule.forRootAsync({
       inject: [ConfigService],

@@ -46,8 +46,9 @@ src/
 │       ├── domain/                  # 함수 정의, 이름, 오류, Runtime port
 │       ├── application/             # 함수 CRUD 유스케이스 조정
 │       ├── infrastructure/
-│       │   ├── kubernetes/          # 공식 Kubernetes client-node 어댑터
-│       │   └── knative/             # Knative Service 구현과 매니페스트
+│       │   ├── events/              # Nest EventEmitter 발행 어댑터
+│       │   ├── kubernetes/          # Kubernetes CRUD와 Watch 어댑터
+│       │   └── knative/             # Knative Service 구현, 매니페스트, 상태 감지
 │       └── presentation/http/       # Controller와 HTTP 예외 매핑
 └── shared/
     ├── config/                      # 환경 변수 스키마와 타입
@@ -61,14 +62,18 @@ src/
 | 라이브러리 | 역할 |
 |---|---|
 | `@kubernetes/client-node` | 토큰, CA, kubeconfig, Kubernetes Custom Resource 요청 처리 |
+| `@nestjs/event-emitter` | 함수 lifecycle 이벤트의 프로세스 내부 발행과 구독 |
 | `@nestjs/config` + `zod` | 환경 변수 로딩, 시작 시 검증, 타입 안전한 설정 조회 |
 | `@nestjs/swagger` + `swagger-ui-express` | 개발 환경의 `/docs` API 문서 |
 | `@nestjs/throttler` | 함수 관리 API 요청 제한 |
 | `helmet` | 기본 HTTP 보안 헤더 |
 | `nestjs-pino` + `pino` | 구조화 로그와 인증 헤더 마스킹 |
+| `pino-pretty` | 로컬 development 로그를 읽기 쉬운 형식으로 출력 |
 | `prom-client` | `/metrics` Prometheus 메트릭 |
 
 `@kubernetes/client-node`는 현재 CommonJS Nest 빌드와 호환되는 `0.22.3`으로 고정했습니다. 최신 1.x를 사용하려면 프로젝트 전체를 ESM으로 전환하는 작업을 함께 해야 합니다.
+
+`pino-pretty`는 `NODE_ENV=development`에서만 활성화됩니다. `test`와 `production`에서는 Fluent Bit과 Loki가 파싱할 수 있도록 원본 JSON을 stdout으로 출력합니다.
 
 ## 현재 구현 범위
 
@@ -81,11 +86,16 @@ src/
 - `PUT /v1/functions/:name`: Knative Service server-side apply
 - `DELETE /v1/functions/:name`: 함수 삭제
 - `POST /v1/functions/:name/render`: Kubernetes 연결 없이 매니페스트만 생성
+- `function.applied`, `function.deleted`: 성공한 관리 명령의 내부 lifecycle 이벤트
+- `function.state.changed`, `function.ready`, `function.failed`: Kubernetes Watch 기반 상태 변경 이벤트
+- `woostack_functions_events_total{type=...}`: lifecycle 이벤트 Prometheus counter
 - 기본 `minScale: 0`, 외부 비공개, non-root/read-only filesystem 보안 정책
 
 모든 `/v1/functions` endpoint는 Bearer token을 요구합니다. `FUNCTION_ALLOW_INSECURE_LOCAL=true`는 비-production 로컬 진단에만 사용할 수 있습니다.
 
 Kubernetes의 Knative Service가 MVP의 desired state 저장소입니다. 별도 DB는 사용하지 않습니다. API가 동적으로 관리하는 함수와 Argo CD가 관리하는 같은 Knative Service를 섞으면 field ownership 충돌이 생기므로 한 함수는 둘 중 한 방식으로만 관리해야 합니다.
+
+현재 lifecycle 이벤트는 단일 control plane 프로세스 안에서 처리하는 best-effort 신호입니다. Kubernetes Watch 연결은 RxJS로 자동 재연결하고, Knative Service를 상태 원본으로 유지하므로 이벤트 listener가 CRUD 성공 여부를 결정하지 않습니다. 다중 replica, replay, 지연 재시도가 필요해지면 발행 포트 뒤에 Redis Streams와 retry Sorted Set을 추가합니다.
 
 ## 로컬 실행
 
